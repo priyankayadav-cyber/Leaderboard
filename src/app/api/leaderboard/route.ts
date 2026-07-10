@@ -175,9 +175,15 @@ app.get("/", async (c) => {
         hotCategory: "Code Assistant",
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Leaderboard Hono API Error:", error);
-    return c.json({ error: "Internal server error." }, 500);
+    return c.json({
+      error: "Internal server error.",
+      message: error.message,
+      stack: error.stack,
+      cwd: process.cwd(),
+      vercel: !!process.env.VERCEL
+    }, 500);
   }
 });
 
