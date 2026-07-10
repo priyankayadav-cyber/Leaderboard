@@ -1,0 +1,60 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Tool {
+  id          String   @id
+  name        String
+  category    String
+  tags        String   // serialized tags array
+  rank        Int
+  growth      Float
+  votes       Int
+  rating      Float
+  saves       Int
+  url         String
+  description String
+  pricing     String
+  visits      String
+  addedDate   String
+}
+
+model Model {
+  id             String   @id
+  name           String
+  provider       String
+  category       String
+  rank           Int
+  growth         Float
+  contextWindow  String
+  pricing        String
+  eloRating      Int
+  benchmarkScore Float
+  openSource     Boolean
+  votes          Int
+  rating         Float
+  saves          Int
+  description    String
+  visits         String
+}
+
+model Company {
+  id            String   @id
+  name          String
+  rank          Int
+  growth        Float
+  funding       String
+  headquarters  String
+  productsCount Int
+  modelsCount   Int
+  votes         Int
+  rating        Float
+  saves         Int
+  description   String
+  visits         String
+}
