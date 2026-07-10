@@ -1,14 +1,13 @@
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
-import { prisma } from "@/lib/prisma";
+import data from "./data.json";
 
 const app = new Hono().basePath("/api/leaderboard");
 
 app.get("/", async (c) => {
   try {
-    // 1. Extract queries
     const tab = c.req.query("tab") || "tools";
-    const search = c.req.query("search") || "";
+    const search = (c.req.query("search") || "").trim().toLowerCase();
     const sort = c.req.query("sort") || "rank";
     const category = c.req.query("category") || "all";
     const pricing = c.req.query("pricing") || "all";
@@ -16,167 +15,94 @@ app.get("/", async (c) => {
     const page = parseInt(c.req.query("page") || "1", 10);
     const limit = parseInt(c.req.query("limit") || "10", 10);
 
-    // Dynamic error/delay simulators for manual checks
-    const delay = c.req.query("delay");
-    if (delay) {
-      const delayMs = parseInt(delay, 10);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    // Pick the right dataset
+    let allItems: any[] = [];
+    if (tab === "models") {
+      allItems = data.models ?? [];
+    } else if (tab === "companies") {
+      allItems = data.companies ?? [];
+    } else {
+      allItems = data.tools ?? [];
     }
-
-    const forceError = c.req.query("error");
-    if (forceError === "true") {
-      return c.json(
-        { error: "Database connection failed. Please try again." },
-        500
-      );
-    }
-
-    // 2. Build where filter
-    const where: any = {};
 
     // Search filter
-    if (search.trim()) {
-      const q = search.trim();
-      if (tab === "tools") {
-        where.OR = [
-          { name: { contains: q } },
-          { description: { contains: q } },
-          { category: { contains: q } },
-          { tags: { contains: q } }
-        ];
-      } else if (tab === "models") {
-        where.OR = [
-          { name: { contains: q } },
-          { provider: { contains: q } },
-          { description: { contains: q } }
-        ];
-      } else if (tab === "companies") {
-        where.OR = [
-          { name: { contains: q } },
-          { description: { contains: q } },
-          { headquarters: { contains: q } }
-        ];
-      }
+    if (search) {
+      allItems = allItems.filter((item) => {
+        const fields = [item.name, item.description, item.category, item.tags, item.provider, item.headquarters]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return fields.includes(search);
+      });
     }
 
     // Category filter
     if (category !== "all") {
-      where.category = {
-        equals: category
-      };
+      allItems = allItems.filter(
+        (item) => item.category?.toLowerCase() === category.toLowerCase()
+      );
     }
 
-    // Pricing filter
+    // Pricing filter (tools only)
     if (pricing !== "all" && tab === "tools") {
-      where.pricing = {
-        equals: pricing
-      };
+      allItems = allItems.filter(
+        (item) => item.pricing?.toLowerCase() === pricing.toLowerCase()
+      );
     }
 
-    // Open Source filter
+    // Open source filter (models only)
     if (openSource !== "all" && tab === "models") {
-      where.openSource = openSource === "true";
+      allItems = allItems.filter(
+        (item) => String(item.openSource) === openSource
+      );
     }
 
-    // 3. Build Sorting
-    const orderBy: any = {};
-    if (sort === "growth") {
-      orderBy.growth = "desc";
-    } else if (sort === "votes") {
-      orderBy.votes = "desc";
-    } else if (sort === "rating") {
-      orderBy.rating = "desc";
-    } else if (sort === "saves") {
-      orderBy.saves = "desc";
-    } else if (sort === "newest" && tab === "tools") {
-      orderBy.addedDate = "desc";
-    } else {
-      orderBy.rank = "asc";
-    }
+    // Sorting
+    allItems = [...allItems].sort((a, b) => {
+      if (sort === "growth") return (b.growth ?? 0) - (a.growth ?? 0);
+      if (sort === "votes") return (b.votes ?? 0) - (a.votes ?? 0);
+      if (sort === "rating") return (b.rating ?? 0) - (a.rating ?? 0);
+      if (sort === "saves") return (b.saves ?? 0) - (a.saves ?? 0);
+      if (sort === "newest" && tab === "tools") return (b.addedDate ?? "").localeCompare(a.addedDate ?? "");
+      return (a.rank ?? 0) - (b.rank ?? 0); // default: rank asc
+    });
 
-    // 4. Fetch Paginated Data & Totals
-    const skip = (page - 1) * limit;
-    let paginatedItems: any[] = [];
-    let totalCount = 0;
-
-    if (tab === "models") {
-      totalCount = await prisma.model.count({ where });
-      paginatedItems = await prisma.model.findMany({
-        where,
-        orderBy,
-        skip,
-        take: limit,
-      });
-    } else if (tab === "companies") {
-      totalCount = await prisma.company.count({ where });
-      paginatedItems = await prisma.company.findMany({
-        where,
-        orderBy,
-        skip,
-        take: limit,
-      });
-    } else {
-      totalCount = await prisma.tool.count({ where });
-      const dbItems = await prisma.tool.findMany({
-        where,
-        orderBy,
-        skip,
-        take: limit,
-      });
-      // Parse tags back into array format
-      paginatedItems = dbItems.map((item) => ({
-        ...item,
-        tags: JSON.parse(item.tags || "[]")
-      }));
-    }
-
+    const totalCount = allItems.length;
     const totalPages = Math.ceil(totalCount / limit);
+    const skip = (page - 1) * limit;
+    const paginatedItems = allItems.slice(skip, skip + limit);
 
-    // 5. Compute distinct categories list dynamically
+    // Categories list
     let categoriesList: string[] = [];
     if (tab === "tools") {
-      const distinctCats = await prisma.tool.findMany({
-        select: { category: true },
-        distinct: ["category"],
-      });
-      categoriesList = distinctCats.map((t) => t.category).sort();
+      categoriesList = [...new Set((data.tools ?? []).map((t: any) => t.category).filter(Boolean))].sort();
     } else if (tab === "models") {
-      const distinctCats = await prisma.model.findMany({
-        select: { category: true },
-        distinct: ["category"],
-      });
-      categoriesList = distinctCats.map((m) => m.category).sort();
+      categoriesList = [...new Set((data.models ?? []).map((m: any) => m.category).filter(Boolean))].sort();
     }
 
-    // 6. Compute overall Stats card metrics
-    const totalToolsCount = await prisma.tool.count();
-    const totalModelsCount = await prisma.model.count();
-    const totalCompaniesCount = await prisma.company.count();
-
-    const toolVotes = await prisma.tool.aggregate({ _sum: { votes: true } });
-    const modelVotes = await prisma.model.aggregate({ _sum: { votes: true } });
-    const companyVotes = await prisma.company.aggregate({ _sum: { votes: true } });
-    const totalVotesSum = (toolVotes._sum.votes || 0) + (modelVotes._sum.votes || 0) + (companyVotes._sum.votes || 0);
+    // Stats
+    const totalTools = (data.tools ?? []).length;
+    const totalModels = (data.models ?? []).length;
+    const totalCompanies = (data.companies ?? []).length;
+    const totalVotes =
+      (data.tools ?? []).reduce((s: number, t: any) => s + (t.votes ?? 0), 0) +
+      (data.models ?? []).reduce((s: number, m: any) => s + (m.votes ?? 0), 0) +
+      (data.companies ?? []).reduce((s: number, c: any) => s + (c.votes ?? 0), 0);
 
     return c.json({
       items: paginatedItems,
-      pagination: {
-        totalCount,
-        totalPages,
-        currentPage: page,
-        limit,
-      },
+      pagination: { totalCount, totalPages, currentPage: page, limit },
       categories: categoriesList,
       stats: {
-        totalTools: totalToolsCount,
-        totalModels: totalModelsCount,
-        totalCompanies: totalCompaniesCount,
-        totalVotes: totalVotesSum,
+        totalTools,
+        totalModels,
+        totalCompanies,
+        totalVotes,
         hotCategory: "Code Assistant",
       },
     });
   } catch (error) {
-    console.error("Leaderboard Hono API Error:", error);
+    console.error("Leaderboard API Error:", error);
     return c.json({ error: "Internal server error." }, 500);
   }
 });
